@@ -556,6 +556,8 @@ export default function (pi: ExtensionAPI) {
 	let firstTokenReceived = false;
 	let isStreaming = false;
 	let ttftHidden = false;
+	let tpsPaused = false;
+	let tpsPauseStart = 0;
 	let lastWindowTps = 0;
 	const TPS_WINDOW_MS = 1000;
 
@@ -576,6 +578,7 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	function updateTpsDisplay(cfg: HudConfig) {
+		if (tpsPaused) return; // Keep last display while tool is running
 		const now = Date.now();
 		const windowStart = now - (cfg.tpsWindow ?? TPS_WINDOW_MS);
 		// Prune old timestamps
@@ -1042,12 +1045,25 @@ export default function (pi: ExtensionAPI) {
 	// ---- Track tool execution ----
 	pi.on("tool_execution_start", async (event) => {
 		runningTools.set(event.toolCallId, { name: event.toolName, startTime: Date.now() });
+		// Pause TPS timer for non-trivial tools (skip edit/write which are fast)
+		if (event.toolName !== "edit" && event.toolName !== "write") {
+			tpsPaused = true;
+			tpsPauseStart = Date.now();
+		}
 	});
 
 	pi.on("tool_execution_end", async (event) => {
 		runningTools.delete(event.toolCallId);
 		if (event.toolName) {
 			toolCounts.set(event.toolName, (toolCounts.get(event.toolName) || 0) + 1);
+		}
+		// Resume TPS timer, account for paused duration
+		if (event.toolName !== "edit" && event.toolName !== "write" && tpsPaused) {
+			tpsPaused = false;
+			const pauseDuration = Date.now() - tpsPauseStart;
+			// Shift timestamps forward by paused duration so sliding window stays accurate
+			tpsTimestamps = tpsTimestamps.map(t => t + pauseDuration);
+			tpsStartTime += pauseDuration;
 		}
 	});
 
@@ -1077,6 +1093,7 @@ export default function (pi: ExtensionAPI) {
 			tpsStartTime = 0;
 			tpsDisplay = "";
 			isStreaming = false;
+			tpsPaused = false;
 		}
 	});
 
